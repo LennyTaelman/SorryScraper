@@ -5,6 +5,10 @@ from typing import Optional, Dict
 import tempfile
 import subprocess
 from datetime import datetime, timezone
+import logging
+
+# Create a module-level logger
+logger = logging.getLogger(__name__)
 
 def get_repo_metadata(repo_path: Path) -> Dict:
     """Get essential metadata about the repository state for reproducibility.
@@ -86,7 +90,7 @@ def prepare_repository(remote_url: str, branch: str, head_sha: str, lean_data: P
         try:
             repo = Repo(checkout_path)
             if repo.head.commit.hexsha == head_sha:
-                print(f"Repository already exists at correct commit {head_sha}")
+                logger.info(f"Repository already exists at correct commit {head_sha}")
                 return checkout_path
         except Exception:
             pass
@@ -97,7 +101,7 @@ def prepare_repository(remote_url: str, branch: str, head_sha: str, lean_data: P
     
     try:
         # Clone repository
-        print(f"Cloning {remote_url} branch {branch}...")
+        logger.info(f"Cloning {remote_url} branch {branch}...")
         repo = Repo.clone_from(
             remote_url,
             checkout_path,
@@ -106,13 +110,13 @@ def prepare_repository(remote_url: str, branch: str, head_sha: str, lean_data: P
         )
         
         # Checkout specific commit
-        print(f"Checking out {head_sha}...")
+        logger.info(f"Checking out {head_sha}...")
         repo.git.checkout(head_sha)
         
         return checkout_path
         
     except Exception as e:
-        print(f"Error preparing repository: {e}")
+        logger.error(f"Error preparing repository: {e}")
         # Clean up on failure
         if checkout_path.exists():
             shutil.rmtree(checkout_path)

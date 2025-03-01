@@ -5,7 +5,10 @@ DATA/
 lean_data
 src/lean_data
 src/lean_data.old
+output.json
 
+# logs
+*.log
 
 # Python
 __pycache__/

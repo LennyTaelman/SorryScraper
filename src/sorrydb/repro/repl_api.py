@@ -4,8 +4,9 @@ import subprocess
 import json
 from pathlib import Path
 from git import Repo
-import time
-import select
+import logging
+
+logger = logging.getLogger(__name__) 
 
 def setup_repl(lean_data: Path, version_tag: str | None = None) -> Path:
     """Clone and build the REPL repository.
@@ -23,27 +24,30 @@ def setup_repl(lean_data: Path, version_tag: str | None = None) -> Path:
         repl_dir = lean_data / "repl"
     
     if not repl_dir.exists():
-        print(f"Cloning REPL repository into {repl_dir}...")
+        logger.info(f"Cloning REPL repository into {repl_dir}...")
         repo = Repo.clone_from(
             "https://github.com/leanprover-community/repl",
             repl_dir
         )
         
         if version_tag is not None:
-            print(f"Checking out REPL at tag: {version_tag}")
+            logger.info(f"Checking out REPL at tag: {version_tag}")
             repo.git.checkout(version_tag)
         
-        print("Building REPL...")
+        logger.info("Building REPL...")
         result = subprocess.run(["lake", "build"], cwd=repl_dir)
         if result.returncode != 0:
+            logger.error("Failed to build REPL")
             raise Exception("Failed to build REPL")
     
     repl_binary = repl_dir / ".lake" / "build" / "bin" / "repl"
     if not repl_binary.exists():
+        logger.error("REPL binary not found at %s", repl_binary)
         raise Exception("REPL binary not found")
     
     # Make binary executable
     repl_binary.chmod(0o755)
+    logger.info("REPL binary ready at %s", repl_binary)
     
     return repl_binary
 
@@ -57,13 +61,13 @@ class LeanRepl:
             repo_path: Path to the repository root (used as working directory)
             repl_binary: Path to the REPL executable
         """
-        print("  Starting REPL process...")
-        print(f"  Working directory: {repo_path}")
-        print(f"  REPL binary: {repl_binary.absolute()}")
+        logger.info("Starting REPL process...")
+        logger.debug("Working directory: %s", repo_path)
+        logger.debug("REPL binary: %s", repl_binary.absolute())
         
         # Start the REPL in the project's environment
         cmd = ["lake", "env", str(repl_binary.absolute())]
-        print(f"  Running command: {' '.join(cmd)}")
+        logger.debug("Running command: %s", ' '.join(cmd))
         
         self.process = subprocess.Popen(
             cmd,
@@ -78,9 +82,10 @@ class LeanRepl:
         # Check if process started successfully
         if self.process.poll() is not None:
             error = self.process.stderr.read()
+            logger.error("Failed to start REPL: %s", error)
             raise Exception(f"Failed to start REPL: {error}")
             
-        print("  REPL process started successfully")
+        logger.info("REPL process started successfully")
     
     def send_command(self, command: dict) -> dict | None:
         """Send a command to the REPL and get the response.
@@ -95,7 +100,7 @@ class LeanRepl:
             Exception if REPL process dies
         """
         try:
-            print("  Sending command to REPL:", json.dumps(command))
+            logger.info("Sending command to REPL: %s", json.dumps(command))
             self.process.stdin.write(json.dumps(command) + "\n\n")
             self.process.stdin.flush()
             
@@ -103,38 +108,49 @@ class LeanRepl:
             while True:
                 if self.process.poll() is not None:
                     error = self.process.stderr.read()
+                    logger.error("REPL died: %s", error)
                     raise Exception(f"REPL died: {error}")
                 
                 line = self.process.stdout.readline()
                 if not line.strip():
                     break
                 response += line
-                print("  Got line from REPL:", line.strip())
             
             if response.strip():
-                print("  Raw REPL response:", response.strip())
-                return json.loads(response)
+                logger.debug("Raw REPL response: %s", response.strip())
+                try:
+                    result = json.loads(response)
+                    logger.info(f"REPL response contains: {', '.join(result.keys())}")
+                    return result
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse REPL response: {e}")
+                    return None
             else:
-                print("  REPL returned empty response")
+                logger.warning("REPL returned empty response")
                 return None
             
         except Exception as e:
-            print(f"  Error sending command to REPL: {e}")
+            logger.error("Error sending command to REPL: %s", e)
             # Try to get any stderr output
             error = self.process.stderr.read()
             if error:
-                print(f"  REPL stderr: {error}")
+                logger.error("REPL stderr: %s", error)
             return None
     
     def close(self):
         """Terminate the REPL process."""
         try:
+            logger.info("Terminating REPL process...")
             self.process.terminate()
             self.process.wait(timeout=5)  # Wait up to 5 seconds for clean termination
         except subprocess.TimeoutExpired:
+            logger.warning("REPL process did not terminate cleanly, forcing kill")
             self.process.kill()  # Force kill if it doesn't terminate cleanly
+        except Exception as e:
+            logger.error("Error while closing REPL process: %s", e)
         finally:
             self.process.wait()  # Make sure process is fully cleaned up
+            logger.info("REPL process terminated")
     
     def __enter__(self):
         """Support for 'with' statement."""
@@ -154,6 +170,8 @@ def get_goal_parent_type(repl: LeanRepl, proof_state_id: int) -> str | None:
     Returns:
         The parent type as a string, or None if failed
     """
+    logger.info("Getting goal parent type for proof state %d", proof_state_id)
+    
     # Original tactic:
     # run_tac (do let parentType ← Lean.Meta.inferType (← Lean.Elab.Tactic.getMainTarget); Lean.logInfo m!"Goal parent type: {parentType}")
     
@@ -167,7 +185,10 @@ def get_goal_parent_type(repl: LeanRepl, proof_state_id: int) -> str | None:
         for msg in response["messages"]:
             if msg.get("severity") == "info" and "data" in msg:
                 if "Goal parent type:" in msg["data"]:
-                    return msg["data"].split("Goal parent type:", 1)[1].strip()
+                    parent_type = msg["data"].split("Goal parent type:", 1)[1].strip()
+                    logger.info("Found goal parent type: %s", parent_type)
+                    return parent_type
     
+    logger.warning("Failed to get goal parent type for proof state %d", proof_state_id)
     return None
 

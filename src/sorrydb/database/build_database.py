@@ -1,9 +1,12 @@
 import subprocess
 from pathlib import Path
 import hashlib
+import logging
 from sorrydb.crawler.git_ops import get_git_blame_info, get_repo_metadata, prepare_repository
 from sorrydb.repro.repl_api import LeanRepl, get_goal_parent_type, setup_repl
 
+# Create a module-level logger
+logger = logging.getLogger(__name__)
 
 def hash_string(s: str) -> str:
     """Create a truncated SHA-256 hash of a string.
@@ -14,7 +17,7 @@ def build_lean_project(repo_path: Path):
     """Run lake commands to build the Lean project."""
     # Check if already built
     if (repo_path / "lake-manifest.json").exists() and (repo_path / ".lake" / "build").exists():
-        print("Project appears to be already built, skipping build step")
+        logger.info("Project appears to be already built, skipping build step")
         return
     
     # Check if the project uses mathlib4
@@ -25,22 +28,23 @@ def build_lean_project(repo_path: Path):
             manifest_content = manifest_path.read_text()
             if "https://github.com/leanprover-community/mathlib4" in manifest_content:
                 uses_mathlib4 = True
-                print("Project uses mathlib4, will get build cache")
+                logger.info("Project uses mathlib4, will get build cache")
         except Exception as e:
-            print(f"Warning: Could not read lake-manifest.json: {e}")
+            logger.warning(f"Could not read lake-manifest.json: {e}")
     
     # Only get build cache if the project uses mathlib4
     if uses_mathlib4:
-        print("Getting build cache...")
+        logger.info("Getting build cache...")
         result = subprocess.run(["lake", "exe", "cache", "get"], cwd=repo_path)
         if result.returncode != 0:
-            print("Warning: lake exe cache get failed, continuing anyway")
+            logger.warning("lake exe cache get failed, continuing anyway")
     else:
-        print("Project does not use mathlib4, skipping build cache step")
+        logger.info("Project does not use mathlib4, skipping build cache step")
     
-    print("Building project...")
+    logger.info("Building project...")
     result = subprocess.run(["lake", "build"], cwd=repo_path)
     if result.returncode != 0:
+        logger.error("lake build failed")
         raise Exception("lake build failed")
 
 def find_sorries_in_file(relative_path: Path, repl: LeanRepl) -> list | None:
@@ -53,27 +57,31 @@ def find_sorries_in_file(relative_path: Path, repl: LeanRepl) -> list | None:
             - goal: str, the goal at the sorry position
         Returns None if no sorries found
     """
-    
+    logger.info(f"Using REPL to find sorries in {relative_path}...")
+
     command = {"path": str(relative_path), "allTactics": True}
     output = repl.send_command(command)
     
     if output is None:
-        print("  REPL returned no output")
+        logger.warning("REPL returned no output")
         return None
         
     if "error" in output:
-        print(f"  REPL error: {output['error']}")
+        logger.warning(f"REPL error: {output['error']}")
         return None
         
     if "sorries" not in output:
-        print("  REPL output missing 'sorries' field")
+        logger.info("REPL output missing 'sorries' field")
         return None
         
-    print(f"  REPL found {len(output['sorries'])} sorries")
+    logger.info(f"REPL found {len(output['sorries'])} sorries")
     return output["sorries"]
 
 def should_process_file(lean_file: Path) -> bool:
-    """Check if file potentially contains sorries."""
+    """Check if file potentially contains sorries.
+    Not strictly needed, but speeds up processing by filtering out files
+    that don't need to be processed by REPL.
+    """
     text = lean_file.read_text()
     return any(term in text for term in ["sorry", "admit", "proof_wanted"])
 
@@ -95,7 +103,6 @@ def process_lean_file(relative_path: Path, repo_path: Path, repl_binary: Path) -
             - blame: dict, git blame information for the sorry line
         Returns None if no sorries found
     """
-    print(f"Processing {relative_path}...")
     
     with LeanRepl(repo_path, repl_binary) as repl:
         # First get all sorries in the file
@@ -160,6 +167,7 @@ def process_lean_repo(repo_path: Path, lean_data: Path, subdir: str | None = Non
     if subdir:
         search_path = repo_path / subdir
         if not search_path.exists():
+            logger.error(f"Subdirectory {subdir} does not exist")
             raise Exception(f"Subdirectory {subdir} does not exist")
         lean_files = [(f.relative_to(repo_path), f) for f in search_path.rglob("*.lean") 
                       if ".lake" not in f.parts and should_process_file(f)]
@@ -167,21 +175,16 @@ def process_lean_repo(repo_path: Path, lean_data: Path, subdir: str | None = Non
         lean_files = [(f.relative_to(repo_path), f) for f in repo_path.rglob("*.lean") 
                       if ".lake" not in f.parts and should_process_file(f)]
     
-    print(f"Found {len(lean_files)} files containing potential sorries")
+    logger.info(f"Found {len(lean_files)} files containing potential sorries")
     
     results = []
     for rel_path, abs_path in lean_files:
-        print(f"\nProcessing {rel_path}...")
         sorries = process_lean_file(rel_path, repo_path, repl_binary)
-        if sorries:
-            print(f"Found {len(sorries)} sorries")
-            for sorry in sorries:
-                sorry["location"]["file"] = str(rel_path)
-                results.append(sorry)
-        else:
-            print("No sorries found (REPL processing failed or returned no results)")
+        for sorry in sorries:
+            sorry["location"]["file"] = str(rel_path)
+            results.append(sorry)
     
-    print(f"\nTotal sorries found: {len(results)}")
+    logger.info(f"Total sorries found: {len(results)}")
     return results
 
 
@@ -203,6 +206,7 @@ def get_repo_lean_version(repo_path: Path) -> str:
     toolchain_path = repo_path / "lean-toolchain"
     
     if not toolchain_path.exists():
+        logger.warning(f"No lean-toolchain file found at {toolchain_path}")
         raise FileNotFoundError(f"No lean-toolchain file found at {toolchain_path}")
     
     try:
@@ -213,12 +217,14 @@ def get_repo_lean_version(repo_path: Path) -> str:
         # Extract the version part after the colon
         if ':' in toolchain_content:
             lean_version = toolchain_content.split(':', 1)[1]
-            print(f"Extracted lean version {lean_version} from {toolchain_path}")
+            logger.info(f"Extracted lean version {lean_version} from {toolchain_path}")
             return lean_version
         else:
+            logger.warning(f"Unexpected format in lean-toolchain: {toolchain_content}")
             raise ValueError(f"Unexpected format in lean-toolchain: {toolchain_content}")
             
     except IOError as e:
+        logger.warning(f"Error reading lean-toolchain file: {e}")
         raise IOError(f"Error reading lean-toolchain file: {e}")
 
 
@@ -244,9 +250,14 @@ def build_database(repo_url: str, branch: str | None = None,
         lean_data = Path("lean_data")
         lean_data.mkdir(exist_ok=True)
     
+    logger.info(f"Processing repository: {repo_url}")
+    if branch:
+        logger.info(f"Using branch: {branch}")
+    
     # Prepare the repository (clone/checkout)
     checkout_path = prepare_repository(repo_url, branch, None, lean_data)
     if not checkout_path:
+        logger.error(f"Failed to prepare repository: {repo_url}")
         raise Exception(f"Failed to prepare repository: {repo_url}")
     
     # Build the Lean project
@@ -256,8 +267,8 @@ def build_database(repo_url: str, branch: str | None = None,
     try:
         lean_version = get_repo_lean_version(checkout_path)
     except (FileNotFoundError, ValueError, IOError) as e:
-        print(f"Encountered error when trying to get lean version: {e}")
-        print("Continuing without specific Lean version")
+        logger.warning(f"Encountered error when trying to get lean version: {e}")
+        logger.info("Continuing without specific Lean version")
         lean_version = None
     
     # Process Lean files to find sorries
@@ -273,6 +284,7 @@ def build_database(repo_url: str, branch: str | None = None,
         "sorries": sorries,
     }
     
+    logger.info(f"Database build complete. Found {len(sorries)} sorries.")
     return results
 
 
