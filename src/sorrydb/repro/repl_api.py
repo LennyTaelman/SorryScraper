@@ -100,7 +100,7 @@ class LeanRepl:
             Exception if REPL process dies
         """
         try:
-            logger.info("Sending command to REPL: %s", json.dumps(command))
+            logger.debug("Sending command to REPL: %s", json.dumps(command))
             self.process.stdin.write(json.dumps(command) + "\n\n")
             self.process.stdin.flush()
             
@@ -120,7 +120,7 @@ class LeanRepl:
                 logger.debug("Raw REPL response: %s", response.strip())
                 try:
                     result = json.loads(response)
-                    logger.info(f"REPL response contains: {', '.join(result.keys())}")
+                    logger.debug(f"REPL response contains: {', '.join(result.keys())}")
                     return result
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse REPL response: {e}")
