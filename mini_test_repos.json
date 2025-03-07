@@ -1,0 +1,11 @@
+{
+    "documentation": "List of repositories to serve as a test suite.",
+    "repos": [
+        {
+            "remote": "https://github.com/austinletson/sorryClientTestRepo"
+        },
+        {
+            "remote": "https://github.com/austinletson/sorryClientTestRepoMath" 
+        }
+    ]
+}

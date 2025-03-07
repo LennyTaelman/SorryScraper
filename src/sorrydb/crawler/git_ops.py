@@ -239,16 +239,19 @@ def leaf_commits(remote_url: str) -> list[dict]:
             # Parse the output into a list of dicts
             commits = []
             for line in result.stdout.splitlines():
-                if not line.strip() or "HEAD" in line:  # Skip empty lines and HEAD pointer
+                logger.debug(f"Processing git ouptut line: {line}")
+                if not line.strip():  # Skip empty lines and HEAD pointer
                     continue
                 
+                if not line.startswith("origin/"):
+                    continue
                 # Format: "origin/branch sha date"
                 parts = line.split()
                 branch = parts[0].replace('origin/', '')
                 sha = parts[1]
                 # Join the remaining parts as the date (might contain spaces)
                 date = " ".join(parts[2:])
-                
+                logger.debug(f"Parsed branch: {branch}, sha: {sha}, date: {date}")
                 commits.append({
                     'branch': branch,
                     'sha': sha,

@@ -18,6 +18,7 @@ Scripts can also be run by activating poetry's virtual environment `eval $(poetr
 3. `offline_sorries.py` clones a repo/branch and runs it through REPL to find
    sorries and determine their proof goal. Outputs list of sorries to a json
    file.
+5. `update_sorry_db` takes a json sorry database of the form `database_schema` and updates the database with any sorries in new leaf commits
 6. `init_db` takes a json file with the same format as `test_repos.json` and a starting date and initialize a json sorry database file with the repos and the starting date
 
 The `get_mathlib_contributors.py` and `get_lean_repos.py` scripts require a `GITHUB_TOKEN` environment variable.
